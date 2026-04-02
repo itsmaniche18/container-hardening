@@ -32,7 +32,7 @@
     
     # Pin packages to specific versions (prevents silent upgrades introducing CVEs)
     RUN apk add --no-cache \
-        nginx=1.24.0-r16 \
+        nginx=1.28.3-r0 \
         && apk upgrade --no-cache
     
     # Only strictly necessary PHP extensions
