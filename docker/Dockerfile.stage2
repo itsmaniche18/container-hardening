@@ -1,0 +1,38 @@
+# Stage 2 — Alpine Base: php:8.2-fpm-alpine
+# Purpose: Replace Debian with minimal Alpine Linux.
+
+FROM php:8.2-fpm-alpine
+
+WORKDIR /var/www/html
+
+# Install nginx + minimal system deps on Alpine
+RUN apk add --no-cache nginx
+
+# Install PHP extensions
+RUN docker-php-ext-install pdo pdo_mysql opcache
+
+# Copy app files
+COPY public/ ./public/
+COPY bootstrap/ ./bootstrap/
+COPY storage/ ./storage/
+COPY composer.json ./
+
+# Add a minimal index.php
+RUN echo "<?php phpinfo();" > /var/www/html/public/index.php
+
+# Basic nginx config pointing to public/
+RUN printf 'server {\n\
+    listen 80;\n\
+    root /var/www/html/public;\n\
+    index index.php;\n\
+    location ~ \\.php$ {\n\
+        fastcgi_pass 127.0.0.1:9000;\n\
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n\
+        include fastcgi_params;\n\
+    }\n\
+}\n' > /etc/nginx/http.d/default.conf
+
+RUN chown -R www-data:www-data storage bootstrap \
+    && chmod -R 775 storage bootstrap
+
+EXPOSE 80

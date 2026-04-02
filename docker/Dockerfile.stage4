@@ -1,0 +1,74 @@
+# Stage 4 — Hardened Final Image
+# Purpose: Apply all remaining hardening on top of Stage 3.
+# Changes: non-root user, pinned packages, read-only filesystem prep,
+#          minimal PHP extensions only.
+
+# --- Builder Stage (same as Stage 3) ---
+    FROM php:8.2-fpm-alpine AS builder
+
+    WORKDIR /app
+    
+    RUN apk add --no-cache curl git unzip nodejs npm
+    
+    RUN curl -sS https://getcomposer.org/installer | php -- \
+        --install-dir=/usr/local/bin --filename=composer
+    
+    RUN docker-php-ext-install pdo pdo_mysql opcache
+    
+    COPY composer.json ./
+    RUN composer install --no-dev --optimize-autoloader --no-interaction 2>/dev/null || true
+    
+    COPY public/ ./public/
+    COPY bootstrap/ ./bootstrap/
+    COPY storage/ ./storage/
+    
+    RUN echo "<?php phpinfo();" > /app/public/index.php
+    
+    
+    # --- Hardened Runtime Stage ---
+    FROM php:8.2-fpm-alpine
+    
+    WORKDIR /var/www/html
+    
+    # Pin packages to specific versions (prevents silent upgrades introducing CVEs)
+    RUN apk add --no-cache \
+        nginx=1.24.0-r16 \
+        && apk upgrade --no-cache
+    
+    # Only strictly necessary PHP extensions
+    RUN docker-php-ext-install pdo pdo_mysql opcache
+    
+    # Copy artifacts from builder
+    COPY --from=builder /app/public ./public/
+    COPY --from=builder /app/bootstrap ./bootstrap/
+    COPY --from=builder /app/storage ./storage/
+    COPY --from=builder /app/composer.json ./
+    
+    # nginx config
+    RUN printf 'server {\n\
+        listen 8080;\n\
+        root /var/www/html/public;\n\
+        index index.php;\n\
+        location ~ \\.php$ {\n\
+            fastcgi_pass 127.0.0.1:9000;\n\
+            fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n\
+            include fastcgi_params;\n\
+        }\n\
+    }\n' > /etc/nginx/http.d/default.conf
+    
+    # Create non-root user
+    RUN adduser -D -u 1001 -s /bin/sh appuser
+    
+    # Set ownership so appuser can write to required directories only
+    RUN chown -R appuser:appuser /var/www/html/storage \
+        && chown -R appuser:appuser /var/www/html/bootstrap \
+        && chmod -R 775 storage bootstrap
+    
+    # Declare writable paths as volumes (supports --read-only at runtime)
+    VOLUME ["/var/www/html/storage", "/var/www/html/bootstrap/cache"]
+    
+    # Drop root — run as non-privileged user
+    USER appuser
+    
+    # Use unprivileged port (non-root can't bind <1024)
+    EXPOSE 8080

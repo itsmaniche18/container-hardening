@@ -1,0 +1,27 @@
+# Stage 1 — Baseline: php:8.2-apache (Debian-based, full image)
+# Purpose: Establish CVE benchmark. No hardening applied.
+
+FROM php:8.2-apache
+
+WORKDIR /var/www/html
+
+# Install common PHP extensions (typical Laravel set)
+RUN docker-php-ext-install pdo pdo_mysql opcache
+
+# Copy app files
+COPY public/ ./public/
+COPY bootstrap/ ./bootstrap/
+COPY storage/ ./storage/
+COPY composer.json ./
+
+# Add a minimal index.php so Apache has something to serve
+RUN echo "<?php phpinfo();" > /var/www/html/public/index.php
+
+# Set Apache document root to public/
+RUN sed -i 's|/var/www/html|/var/www/html/public|g' \
+    /etc/apache2/sites-available/000-default.conf
+
+RUN chown -R www-data:www-data storage bootstrap/cache \
+    && chmod -R 775 storage bootstrap/cache
+
+EXPOSE 80

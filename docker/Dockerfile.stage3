@@ -1,0 +1,70 @@
+# Stage 3 — Multi-Stage Build
+# Purpose: Use a builder stage for dependencies, copy only artifacts to runtime.
+# Build-time tools (composer, npm, gcc) are excluded from the final image.
+
+# --- Builder Stage ---
+    FROM php:8.2-fpm-alpine AS builder
+
+    WORKDIR /app
+    
+    # Install build-time tools only (won't appear in final image)
+    RUN apk add --no-cache \
+        curl \
+        git \
+        unzip \
+        nodejs \
+        npm
+    
+    # Install Composer
+    RUN curl -sS https://getcomposer.org/installer | php -- \
+        --install-dir=/usr/local/bin --filename=composer
+    
+    # Install PHP extensions needed for composer
+    RUN docker-php-ext-install pdo pdo_mysql opcache
+    
+    # Copy and install dependencies
+    COPY composer.json ./
+    RUN composer install --no-dev --optimize-autoloader --no-interaction 2>/dev/null || true
+    
+    # Copy app files
+    COPY public/ ./public/
+    COPY bootstrap/ ./bootstrap/
+    COPY storage/ ./storage/
+    
+    # Create index.php
+    RUN echo "<?php phpinfo();" > /app/public/index.php
+    
+    
+    # --- Runtime Stage ---
+    FROM php:8.2-fpm-alpine
+    
+    WORKDIR /var/www/html
+    
+    # Only runtime system deps
+    RUN apk add --no-cache nginx
+    
+    # Install only runtime PHP extensions
+    RUN docker-php-ext-install pdo pdo_mysql opcache
+    
+    # Copy ONLY production artifacts from builder (no composer, npm, gcc, etc.)
+    COPY --from=builder /app/public ./public/
+    COPY --from=builder /app/bootstrap ./bootstrap/
+    COPY --from=builder /app/storage ./storage/
+    COPY --from=builder /app/composer.json ./
+    
+    # nginx config
+    RUN printf 'server {\n\
+        listen 80;\n\
+        root /var/www/html/public;\n\
+        index index.php;\n\
+        location ~ \\.php$ {\n\
+            fastcgi_pass 127.0.0.1:9000;\n\
+            fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\n\
+            include fastcgi_params;\n\
+        }\n\
+    }\n' > /etc/nginx/http.d/default.conf
+    
+    RUN chown -R www-data:www-data storage bootstrap \
+        && chmod -R 775 storage bootstrap
+    
+    EXPOSE 80
